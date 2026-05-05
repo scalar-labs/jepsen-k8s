@@ -1,0 +1,108 @@
+name: Example Cluster Test
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  postgres-register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure tools
+        uses: DeLaGuardo/setup-clojure@13
+        with:
+          lein: 2.11.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.1
+        with:
+          version: v3.18.4
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('project.clj', 'examples/**/project.clj') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: jepsen
+          wait: 120s
+
+      - name: Install MetalLB
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+          kubectl wait --namespace metallb-system \
+            --for=condition=available deployment/controller \
+            --timeout=120s
+          kubectl wait --namespace metallb-system \
+            --for=condition=ready pod \
+            --selector=component=speaker \
+            --timeout=120s
+
+      - name: Configure MetalLB
+        run: |
+          KIND_SUBNET="$(docker network inspect kind -f '{{(index .IPAM.Config 0).Subnet}}')"
+          METALLB_RANGE="$(python3 -c 'import ipaddress, sys; n = ipaddress.ip_network(sys.argv[1], strict=False); print(f"{n[-51]}-{n[-2]}")' "$KIND_SUBNET")"
+          cat <<EOF | kubectl apply -f -
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: kind-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+              - $METALLB_RANGE
+          ---
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: kind-l2
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - kind-pool
+          EOF
+
+      - name: Install local jepsen-k8s snapshot
+        run: lein install
+
+      - name: Run postgres-register example
+        working-directory: examples/postgres-register
+        run: |
+          lein run -- test --no-ssh --time-limit 30 \
+            --kube-context kind-jepsen \
+            --namespace jepsen-postgres \
+            --release jepsen-postgres
+
+      - name: Dump Kubernetes state on failure
+        if: failure()
+        run: |
+          kubectl get all --all-namespaces
+          kubectl describe pods --all-namespaces
+          kubectl get events --all-namespaces --sort-by=.lastTimestamp
+
+      - name: Upload Jepsen store
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-register-store
+          path: examples/postgres-register/store
+          if-no-files-found: ignore
