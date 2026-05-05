@@ -1,0 +1,8 @@
+pom.xml
+
+**/.clj-kondo
+**/.cpcache/
+**/.lein-failures
+**/.lsp/
+**/store/
+**/target/
