@@ -47,7 +47,7 @@
   (or service (str release "-postgresql")))
 
 (defn- jdbc-url
-  [{:keys [jdbc-url jdbc-url-ref postgres-db]}]
+  [{:keys [jdbc-url jdbc-url-ref]}]
   (or jdbc-url
       @jdbc-url-ref
       (throw (ex-info "JDBC URL has not been initialized" {}))))

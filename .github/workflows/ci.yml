@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure tools
+        uses: DeLaGuardo/setup-clojure@13
+        with:
+          lein: 2.11.2
+          clj-kondo: 2024.11.14
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('project.clj', 'examples/**/project.clj') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Lint
+        run: clj-kondo --lint src test examples/postgres-register/src examples/postgres-register/test
+
+      - name: Check formatting
+        run: lein cljfmt check src test examples/postgres-register/src examples/postgres-register/test
+
+      - name: Test
+        run: lein test
+
+      - name: Install local snapshot
+        run: lein install
+
+      - name: Test postgres-register example
+        working-directory: examples/postgres-register
+        run: lein test

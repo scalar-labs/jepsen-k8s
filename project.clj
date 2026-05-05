@@ -7,6 +7,7 @@
                  [jepsen "0.3.10"]
                  [clj-commons/clj-yaml "1.0.29"]
                  [cheshire "5.13.0"]]
+  :plugins [[lein-cljfmt "0.9.2"]]
   :profiles {:dev {:dependencies [[lambdaisland/kaocha "1.91.1392"]]}}
   :source-paths ["src"]
   :test-paths ["test"])

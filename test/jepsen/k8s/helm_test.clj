@@ -1,5 +1,5 @@
 (ns jepsen.k8s.helm-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is]]
             [jepsen.k8s.exec :as e]
             [jepsen.k8s.helm :as helm]))
 

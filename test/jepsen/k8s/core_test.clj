@@ -1,5 +1,5 @@
 (ns jepsen.k8s.core-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is]]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [jepsen.k8s.exec :as e]
@@ -89,9 +89,9 @@
                                    (throw (ex-info "previous container not found"
                                                    {:pod (second args)})))))]
       (is (nil? (k8s/collect-logs! {:k8s {:namespace "jepsen-test"}}
-                                     {:selector {:app "db"}
-                                      :output-dir (.getPath dir)
-                                      :previous? true})))
+                                   {:selector {:app "db"}
+                                    :output-dir (.getPath dir)
+                                    :previous? true})))
       (is (= "db-0 log"
              (slurp (io/file dir "db-0.previous.log"))))
       (is (not (.exists (io/file dir "db-1.previous.log"))))

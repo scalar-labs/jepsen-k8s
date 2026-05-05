@@ -1,5 +1,5 @@
 (ns jepsen.k8s.examples.postgres-register-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is]]
             [jepsen.nemesis :as nemesis]
             [jepsen.k8s.examples.postgres-register :as pg]))
 

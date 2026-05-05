@@ -1,5 +1,5 @@
 (ns jepsen.k8s.chaos-mesh.core-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is]]
             [jepsen.k8s.chaos-mesh.core :as cm]
             [jepsen.k8s.exec :as e]))
 
