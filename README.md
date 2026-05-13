@@ -1,8 +1,6 @@
 # jepsen-k8s
 
-Experimental Kubernetes helpers for Jepsen tests.
-
-This project uses Leiningen, matching Jepsen's own project layout.
+Kubernetes helpers for Jepsen tests.
 
 Leiningen dependency:
 
@@ -20,13 +18,6 @@ The goal is to keep Jepsen itself unchanged while providing reusable helpers for
 - run artifact collection
 
 This is intended to be a thin extraction target from existing Jepsen tests such as ScalarDB-on-Kubernetes tests.
-
-## Development
-
-```sh
-lein test
-lein install
-```
 
 ## Design
 
@@ -50,7 +41,7 @@ Jepsen test
 ```clojure
 (require '[jepsen.k8s.core :as k8s]
          '[jepsen.k8s.helm :as helm]
-         '[jepsen.k8s.chaos-mesh.network :as net])
+         '[jepsen.k8s.chaos-mesh.core :as chaos-mesh])
 
 (def test
   {:k8s {:context "kind-jepsen"
@@ -67,11 +58,8 @@ Jepsen test
                  :selector "app=my-db"
                  :timeout "300s"})
 
-(net/apply-partition! test
-  {:name "partition-db"
-   :namespace "jepsen-test"
-   :selector {:app "my-db"}
-   :mode "all"})
+(def nemesis
+  (chaos-mesh/nemesis-package db interval faults))
 ```
 
 ## Notes

@@ -36,12 +36,3 @@
   (let [ctx (get-in test [:k8s :context])
         ctx-args (if ctx [:--kube-context ctx] [])]
     (exec :helm (concat ctx-args args))))
-
-(defn safe-name
-  "Returns a k8s-friendly name fragment."
-  [s]
-  (-> (str s)
-      str/lower-case
-      (str/replace #"[^a-z0-9-]" "-")
-      (str/replace #"-+" "-")
-      (str/replace #"^-|-$" "")))
