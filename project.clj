@@ -3,6 +3,15 @@
   :url "https://github.com/scalar-labs/jepsen-k8s"
   :license {:name "Apache License 2.0"
             :url "https://www.apache.org/licenses/LICENSE-2.0"}
+  :scm {:url "https://github.com/scalar-labs/jepsen-k8s"
+        :connection "scm:git:https://github.com/scalar-labs/jepsen-k8s.git"
+        :developerConnection "scm:git:https://github.com/scalar-labs/jepsen-k8s.git"
+        :tag "HEAD"}
+  :pom-addition [:developers
+                 [:developer
+                  [:id "yuji"]
+                  [:name "Yuji Ito"]
+                  [:email "yuji.ito@scalar-labs.com"]]]
   :dependencies [[org.clojure/clojure "1.11.3"]
                  [jepsen "0.3.10"]
                  [clj-commons/clj-yaml "1.0.29"]
