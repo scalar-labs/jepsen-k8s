@@ -14,7 +14,6 @@
             [jepsen.k8s.chaos-mesh.core :as chaos-mesh]
             [jepsen.k8s.core :as k8s]
             [jepsen.k8s.helm :as helm]
-            [jepsen.k8s.nemesis :as k8s-nemesis]
             [jepsen.tests.linearizable-register :as register])
   (:import (java.sql DriverManager SQLException)))
 
@@ -337,7 +336,7 @@
         pg-db (db opts)
         faults (seq (:nemesis opts))
         package (when faults
-                  (k8s-nemesis/chaos-mesh-package
+                  (chaos-mesh/nemesis-package
                    pg-db
                    (:nemesis-interval opts)
                    faults))
