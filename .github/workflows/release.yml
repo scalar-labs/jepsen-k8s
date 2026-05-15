@@ -112,9 +112,7 @@ jobs:
           curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer $AUTH" \
             -F "bundle=@central-bundle.zip" \
-            "https://central.sonatype.com/api/v1/publisher/upload?name=jepsen-k8s-${VERSION}&publishingType=USER_MANAGED"
-          echo
-          echo "Upload accepted. Review and publish at https://central.sonatype.com/publishing/deployments"
+            "https://central.sonatype.com/api/v1/publisher/upload?name=jepsen-k8s-${VERSION}&publishingType=AUTOMATIC"
 
       - name: Publish snapshot to Central Portal
         if: steps.ver.outputs.is_snapshot == 'true'
