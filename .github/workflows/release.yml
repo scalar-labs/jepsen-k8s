@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure tools
+        uses: DeLaGuardo/setup-clojure@13
+        with:
+          lein: 2.11.2
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('project.clj') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.MAVEN_CENTRAL_GPG_SECRET_KEY }}
+          passphrase: ${{ secrets.MAVEN_CENTRAL_GPG_PASSPHRASE }}
+
+      - name: Determine version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            IS_SNAPSHOT=false
+          else
+            VERSION=$(awk -F\" '/^\(defproject/ {print $2; exit}' project.clj)
+            IS_SNAPSHOT=true
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION (snapshot=$IS_SNAPSHOT)"
+
+      - name: Set release version in project.clj
+        if: steps.ver.outputs.is_snapshot == 'false'
+        run: |
+          set -euo pipefail
+          sed -i -E "s|(\(defproject com\.scalar-labs/jepsen-k8s) \"[^\"]+\"|\1 \"${{ steps.ver.outputs.version }}\"|" project.clj
+          head -n1 project.clj
+
+      - name: Build artifacts
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          GPG_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          ARTIFACT=jepsen-k8s
+          GROUP_PATH=com/scalar-labs/jepsen-k8s
+          STAGE="bundle/${GROUP_PATH}/${VERSION}"
+
+          lein pom
+          lein jar
+
+          MAIN_JAR="target/${ARTIFACT}-${VERSION}.jar"
+          test -f "$MAIN_JAR" || { echo "Expected $MAIN_JAR not found"; ls target; exit 1; }
+
+          (cd src && jar cf "$GITHUB_WORKSPACE/target/${ARTIFACT}-${VERSION}-sources.jar" .)
+
+          mkdir -p target/empty-javadoc
+          echo "No Javadoc is produced for this Clojure library." > target/empty-javadoc/README.txt
+          (cd target/empty-javadoc && jar cf "$GITHUB_WORKSPACE/target/${ARTIFACT}-${VERSION}-javadoc.jar" .)
+
+          mkdir -p "$STAGE"
+          cp pom.xml "$STAGE/${ARTIFACT}-${VERSION}.pom"
+          cp "target/${ARTIFACT}-${VERSION}.jar" "$STAGE/"
+          cp "target/${ARTIFACT}-${VERSION}-sources.jar" "$STAGE/"
+          cp "target/${ARTIFACT}-${VERSION}-javadoc.jar" "$STAGE/"
+
+          cd "$STAGE"
+          for f in *.pom *.jar; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+                --armor --detach-sign "$f"
+            md5sum "$f"  | awk '{print $1}' > "$f.md5"
+            sha1sum "$f" | awk '{print $1}' > "$f.sha1"
+          done
+          ls -1
+
+      - name: Publish release bundle to Central Portal
+        if: steps.ver.outputs.is_snapshot == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          (cd bundle && zip -r ../central-bundle.zip .)
+          AUTH=$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $AUTH" \
+            -F "bundle=@central-bundle.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?name=jepsen-k8s-${VERSION}&publishingType=AUTOMATIC"
+
+      - name: Publish snapshot to Central Portal
+        if: steps.ver.outputs.is_snapshot == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BASE="https://central.sonatype.com/repository/maven-snapshots/com/scalar-labs/jepsen-k8s/${VERSION}"
+          cd "bundle/com/scalar-labs/jepsen-k8s/${VERSION}"
+          for f in *; do
+            echo "Uploading $f"
+            curl --fail-with-body -sS -u "$CENTRAL_USERNAME:$CENTRAL_PASSWORD" \
+              --upload-file "$f" \
+              "$BASE/$f"
+          done
