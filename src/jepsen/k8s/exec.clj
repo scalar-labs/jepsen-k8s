@@ -5,12 +5,14 @@
             [jepsen.control :as c]
             [jepsen.control.core :as cc]))
 
-(defn- k8s-context-args
-  "Returns kubectl/helm context args from test config."
-  [test]
-  (if-let [ctx (get-in test [:k8s :context])]
-    [:--context ctx]
-    []))
+(defn- k8s-global-args
+  "Returns kubectl/helm global args (kubeconfig and context) from test config.
+  context-flag is :--context for kubectl and :--kube-context for helm; both
+  tools accept --kubeconfig."
+  [test context-flag]
+  (let [{:keys [kubeconfig context]} (:k8s test)]
+    (concat (when kubeconfig [:--kubeconfig kubeconfig])
+            (when context [context-flag context]))))
 
 (defn- exec
   [& commands]
@@ -23,16 +25,14 @@
        c/just-stdout))
 
 (defn kubectl!
-  "Runs kubectl with optional --context from test.
+  "Runs kubectl with optional --kubeconfig and --context from test.
 
   Example:
     (kubectl! test :get :pod :-n \"jepsen-test\")"
   [test & args]
-  (exec :kubectl (concat (k8s-context-args test) args)))
+  (exec :kubectl (concat (k8s-global-args test :--context) args)))
 
 (defn helm!
-  "Runs helm with optional --kube-context from test."
+  "Runs helm with optional --kubeconfig and --kube-context from test."
   [test & args]
-  (let [ctx (get-in test [:k8s :context])
-        ctx-args (if ctx [:--kube-context ctx] [])]
-    (exec :helm (concat ctx-args args))))
+  (exec :helm (concat (k8s-global-args test :--kube-context) args)))
