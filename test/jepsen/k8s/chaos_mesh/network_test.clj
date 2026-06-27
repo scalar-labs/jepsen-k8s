@@ -61,7 +61,25 @@
     (is (= "true" (get-in manifest [:metadata :labels :jepsen-partition])))
     (is (= "chaos-mesh" (get-in manifest [:metadata :namespace])))))
 
+(deftest grudge->rules-is-deterministic
+  (testing "nodes, sources, and rule order are stable for a given grudge"
+    (let [grudge {"pg-2" #{"pg-1" "pg-0"}
+                  "pg-1" #{"pg-0"}
+                  "pg-0" #{"pg-1"}}]
+      (is (= (grudge->rules grudge) (grudge->rules grudge)))
+      (is (= [{:nodes ["pg-0"]        :sources ["pg-1"]}
+              {:nodes ["pg-1"]        :sources ["pg-0"]}
+              {:nodes ["pg-2"]        :sources ["pg-0" "pg-1"]}]
+             (grudge->rules grudge))))))
+
 (deftest pod-targets-respects-spec
   (is (= 1 (count (pod-targets pods :one))))
   (is (every? (set pods) (pod-targets pods :one)))
   (is (= (set pods) (set (pod-targets pods :all)))))
+
+(deftest empty-pods-do-not-throw
+  (testing "no pods yields an empty grudge / selection instead of throwing"
+    (doseq [spec [:one :majority :majorities-ring :minority-third]]
+      (is (= {} (pod-grudge [] spec)) (str spec)))
+    (doseq [spec [nil :one :minority :majority :minority-third :all]]
+      (is (= [] (pod-targets [] spec)) (str spec)))))

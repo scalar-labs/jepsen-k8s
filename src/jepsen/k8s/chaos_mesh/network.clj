@@ -3,6 +3,7 @@
   Supported faults: :partition, :delay, :loss, :corrupt, :duplicate, :reorder, :rate."
   (:require [clj-yaml.core :as yaml]
             [clojure.string :as str]
+            [clojure.tools.logging :refer [warn]]
             [jepsen.k8s.chaos-mesh.experiment :as exp]
             [jepsen.k8s.core :as k8s]
             [jepsen.nemesis :as n]
@@ -18,30 +19,39 @@
 (defn- pod-grudge
   "Computes a grudge over the given pods for a partition spec. Mirrors
   jepsen.nemesis.combined/grudge, but operates on the live Kubernetes pods
-  rather than the test's placeholder :nodes."
+  rather than the test's placeholder :nodes. Returns an empty grudge when there
+  are no pods."
   [pods part-spec]
-  (case part-spec
-    :one              (n/complete-grudge (n/split-one pods))
-    :majority         (n/complete-grudge (n/bisect (shuffle pods)))
-    :majorities-ring  (n/majorities-ring pods)
-    :minority-third   (n/complete-grudge (split-at (util/minority-third
-                                                    (count pods))
-                                                   (shuffle pods)))
-    part-spec))
+  (if (empty? pods)
+    {}
+    (case part-spec
+      :one              (n/complete-grudge (n/split-one pods))
+      :majority         (n/complete-grudge (n/bisect (shuffle pods)))
+      :majorities-ring  (n/majorities-ring pods)
+      :minority-third   (n/complete-grudge (split-at (util/minority-third
+                                                      (count pods))
+                                                     (shuffle pods)))
+      part-spec)))
 
 (defn- grudge->rules
   "Turns a grudge ({node #{nodes it drops inbound traffic from}}) into partition
   rules. Mirrors jepsen.net/drop-all!: each node drops inbound traffic from the
   pods in its grudge set. Nodes sharing the same drop-set are grouped into one
   rule to keep the resource count down; the result faithfully reproduces any
-  grudge, including asymmetric ones such as :majorities-ring."
+  grudge, including asymmetric ones such as :majorities-ring.
+
+  Nodes, sources, and the rule sequence are all sorted so that a given grudge
+  always yields the same rules in the same order (stable resource names and
+  YAML)."
   [grudge]
   (->> grudge
        (filter (fn [[_node sources]] (seq sources)))
        (group-by (fn [[_node sources]] sources))
        (map (fn [[sources entries]]
-              {:nodes   (mapv first entries)
-               :sources (vec sources)}))))
+              {:nodes   (vec (sort (map first entries)))
+               :sources (vec (sort sources))}))
+       (sort-by :nodes)
+       vec))
 
 (defn- make-partition-manifest
   "A NetworkChaos that blocks traffic from `sources` to `nodes` (direction
@@ -71,21 +81,27 @@
                              :-o :name
                              :--request-timeout "10s")
          (mapv (fn [line] (last (str/split line #"/")))))
-    (catch Exception _ [])))
-
-(defn- apply-partition!
-  [test grudge dir]
-  (doseq [[i {:keys [nodes sources]}] (map-indexed vector (grudge->rules grudge))]
-    (exp/apply! test
-                (make-partition-manifest test (str "partition-" i) nodes sources)
-                dir))
-  {:isolated grudge})
+    (catch Exception e
+      (warn "failed to list partition NetworkChaos; assuming none"
+            {:error (.getMessage e)})
+      [])))
 
 (defn- stop-partition!
   [test]
   (doseq [name (partition-chaos-names test)]
     (exp/stop! test {:name name :kind "networkchaos"}))
   :network-healed)
+
+(defn- apply-partition!
+  [test grudge dir]
+  ;; Clear any prior partition first, so a shrinking rule count never leaves
+  ;; superseded partition-* resources behind.
+  (stop-partition! test)
+  (doseq [[i {:keys [nodes sources]}] (map-indexed vector (grudge->rules grudge))]
+    (exp/apply! test
+                (make-partition-manifest test (str "partition-" i) nodes sources)
+                dir))
+  {:isolated grudge})
 
 (defn- partition-nemesis
   "Partition nemesis for Chaos Mesh. Computes the grudge over the live pods in
@@ -121,16 +137,19 @@
 
 (defn- pod-targets
   "Selects pods from the test namespace for the given node spec. Operates on the
-  live Kubernetes pods rather than the test's placeholder :nodes."
+  live Kubernetes pods rather than the test's placeholder :nodes. Returns an
+  empty selection when there are no pods."
   [pods node-spec]
-  (case node-spec
-    nil             (util/random-nonempty-subset pods)
-    :one            (list (rand-nth pods))
-    :minority       (take (dec (util/majority (count pods))) (shuffle pods))
-    :majority       (take (util/majority (count pods)) (shuffle pods))
-    :minority-third (take (util/minority-third (count pods)) (shuffle pods))
-    :all            pods
-    node-spec))
+  (if (empty? pods)
+    []
+    (case node-spec
+      nil             (util/random-nonempty-subset pods)
+      :one            (list (rand-nth pods))
+      :minority       (take (dec (util/majority (count pods))) (shuffle pods))
+      :majority       (take (util/majority (count pods)) (shuffle pods))
+      :minority-third (take (util/minority-third (count pods)) (shuffle pods))
+      :all            pods
+      node-spec)))
 
 (defn- make-packet-manifest
   [test targets behaviour]
