@@ -72,7 +72,9 @@
                       :selector {:pods {ns (vec sources)}}}}})))
 
 (defn- partition-chaos-names
-  "Names of the partition NetworkChaos resources currently applied."
+  "Names of the partition NetworkChaos resources currently applied. Re-throws if
+  the listing fails: a cleanup that cannot see the live resources must surface as
+  a failed op rather than a false heal that leaves the partition in place."
   [test]
   (try
     (->> (k8s/kubectl-lines! test :get :networkchaos
@@ -82,9 +84,8 @@
                              :--request-timeout "10s")
          (mapv (fn [line] (last (str/split line #"/")))))
     (catch Exception e
-      (warn "failed to list partition NetworkChaos; assuming none"
-            {:error (.getMessage e)})
-      [])))
+      (warn "failed to list partition NetworkChaos" {:error (.getMessage e)})
+      (throw e))))
 
 (defn- stop-partition!
   [test]
@@ -97,10 +98,16 @@
   ;; Clear any prior partition first, so a shrinking rule count never leaves
   ;; superseded partition-* resources behind.
   (stop-partition! test)
-  (doseq [[i {:keys [nodes sources]}] (map-indexed vector (grudge->rules grudge))]
-    (exp/apply! test
-                (make-partition-manifest test (str "partition-" i) nodes sources)
-                dir))
+  ;; If applying any rule fails partway, roll back the ones already applied so we
+  ;; don't leave a half-applied partition behind before propagating the error.
+  (try
+    (doseq [[i {:keys [nodes sources]}] (map-indexed vector (grudge->rules grudge))]
+      (exp/apply! test
+                  (make-partition-manifest test (str "partition-" i) nodes sources)
+                  dir))
+    (catch Exception e
+      (stop-partition! test)
+      (throw e)))
   {:isolated grudge})
 
 (defn- partition-nemesis
@@ -130,7 +137,7 @@
       (stop-partition! test))))
 
 (defn partition-package
-  "Replace partition-nemesis for Chaos Mesh."
+  "Replaces partition-nemesis for Chaos Mesh."
   [opts]
   (assoc (jn/partition-package opts)
          :nemesis (partition-nemesis opts)))
@@ -230,7 +237,7 @@
       (stop-packet! test))))
 
 (defn packet-package
-  "Replace packet-nemesis for Chaos Mesh."
+  "Replaces packet-nemesis for Chaos Mesh."
   [opts]
   (assoc (jn/packet-package opts)
          :nemesis (packet-nemesis opts)))

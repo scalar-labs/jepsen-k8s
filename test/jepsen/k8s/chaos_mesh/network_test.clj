@@ -1,11 +1,15 @@
 (ns jepsen.k8s.chaos-mesh.network-test
   (:require [clojure.test :refer [deftest is testing]]
             [clj-yaml.core :as yaml]
-            [jepsen.k8s.chaos-mesh.network :as network]))
+            [jepsen.k8s.chaos-mesh.experiment :as exp]
+            [jepsen.k8s.chaos-mesh.network :as network]
+            [jepsen.k8s.core :as k8s]))
 
 (def ^:private pod-grudge #'network/pod-grudge)
 (def ^:private grudge->rules #'network/grudge->rules)
 (def ^:private make-partition-manifest #'network/make-partition-manifest)
+(def ^:private partition-chaos-names #'network/partition-chaos-names)
+(def ^:private apply-partition! #'network/apply-partition!)
 (def ^:private pod-targets #'network/pod-targets)
 
 (def pods ["pg-0" "pg-1" "pg-2"])
@@ -83,3 +87,21 @@
       (is (= {} (pod-grudge [] spec)) (str spec)))
     (doseq [spec [nil :one :minority :majority :minority-third :all]]
       (is (= [] (pod-targets [] spec)) (str spec)))))
+
+(deftest listing-failure-propagates-instead-of-false-heal
+  (testing "a failed NetworkChaos listing surfaces rather than reporting healed"
+    (with-redefs [k8s/kubectl-lines! (fn [& _] (throw (ex-info "api down" {})))]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (partition-chaos-names {}))))))
+
+(deftest apply-partition-rolls-back-on-failure
+  (testing "a mid-apply failure tears down already-applied rules, then throws"
+    (let [list-calls (atom 0)]
+      (with-redefs [k8s/kubectl-lines! (fn [& _] (swap! list-calls inc) [])
+                    exp/apply! (fn [& _] (throw (ex-info "boom" {})))]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (apply-partition! {:k8s {:namespace "ns"}}
+                                       {"pg-0" #{"pg-1"} "pg-1" #{"pg-0"}}
+                                       "/tmp")))
+        ;; listed once for the pre-clear and once for the rollback
+        (is (= 2 @list-calls))))))
