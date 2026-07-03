@@ -31,7 +31,7 @@
       :minority-third   (n/complete-grudge (split-at (util/minority-third
                                                       (count pods))
                                                      (shuffle pods)))
-      part-spec)))
+      (throw (ex-info "unknown partition spec" {:spec part-spec})))))
 
 (defn- grudge->rules
   "Turns a grudge ({node #{nodes it drops inbound traffic from}}) into partition
@@ -98,16 +98,27 @@
   ;; Clear any prior partition first, so a shrinking rule count never leaves
   ;; superseded partition-* resources behind.
   (stop-partition! test)
-  ;; If applying any rule fails partway, roll back the ones already applied so we
-  ;; don't leave a half-applied partition behind before propagating the error.
-  (try
-    (doseq [[i {:keys [nodes sources]}] (map-indexed vector (grudge->rules grudge))]
-      (exp/apply! test
-                  (make-partition-manifest test (str "partition-" i) nodes sources)
-                  dir))
-    (catch Exception e
-      (stop-partition! test)
-      (throw e)))
+  (let [rules (grudge->rules grudge)]
+    ;; A grudge that produces no rules (e.g. :minority-third on a small cluster)
+    ;; applies nothing yet still reports :isolated success, so warn rather than
+    ;; let the fault silently become a no-op.
+    (when (empty? rules)
+      (warn "partition grudge produced no rules; fault is a no-op"
+            {:grudge grudge}))
+    (try
+      (doseq [[i {:keys [nodes sources]}] (map-indexed vector rules)]
+        (exp/apply! test
+                    (make-partition-manifest test (str "partition-" i) nodes sources)
+                    dir))
+      (catch Exception e
+        ;; Guard the rollback so a failing relist can't shadow the original
+        ;; apply! error as the recorded root cause.
+        (try
+          (stop-partition! test)
+          (catch Exception cleanup-e
+            (warn "rollback after failed partition apply also failed"
+                  {:error (.getMessage cleanup-e)})))
+        (throw e))))
   {:isolated grudge})
 
 (defn- partition-nemesis
@@ -156,7 +167,7 @@
       :majority       (take (util/majority (count pods)) (shuffle pods))
       :minority-third (take (util/minority-third (count pods)) (shuffle pods))
       :all            pods
-      node-spec)))
+      (throw (ex-info "unknown target spec" {:spec node-spec})))))
 
 (defn- make-packet-manifest
   [test targets behaviour]
