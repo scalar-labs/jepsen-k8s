@@ -66,8 +66,8 @@
   (let [opts {:db db
               :interval interval
               :faults (set faults)
-              :partition {:targets [:one]}
-              :packet {:targets [:one]
+              :partition {:targets [:one :majority :majorities-ring :minority-third]}
+              :packet {:targets [:one :minority :majority :minority-third :all]
                        :behaviors (reduce (fn [acc [k v]] (conj acc {k v}))
                                           []
                                           net/all-packet-behaviors)}
