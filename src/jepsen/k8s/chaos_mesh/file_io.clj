@@ -1,0 +1,160 @@
+(ns jepsen.k8s.chaos-mesh.file-io
+  "File read/write failures using Chaos Mesh's IOChaos."
+  (:require [clj-yaml.core :as yaml]
+            [clojure.string :as str]
+            [jepsen.generator :as gen]
+            [jepsen.k8s.chaos-mesh.experiment :as exp]
+            [jepsen.k8s.core :as k8s]
+            [jepsen.nemesis :as n]
+            [jepsen.nemesis.combined :as jn])
+  (:import (java.nio.file Path Paths)))
+
+(def ^:private experiment-name "file-io-fault")
+(def ^:private io-methods #{:read :write})
+
+(defn- path
+  [option value]
+  (when-not (and (string? value) (not (str/blank? value)))
+    (throw (ex-info (str (name option) " must be a non-empty string")
+                    {:option option :value value})))
+  (let [path (Paths/get value (make-array String 0))]
+    (when-not (.isAbsolute path)
+      (throw (ex-info (str (name option) " must be absolute")
+                      {:option option :value value})))
+    (.normalize path)))
+
+(defn- validate-config
+  [config]
+  (let [config      (merge {:targets [:one]
+                            :methods [:read :write]
+                            :errno 5
+                            :percent 100}
+                           config)
+        volume-path (path :volume-path (:volume-path config))
+        file-path   (path :file-path (:file-path config))
+        methods     (:methods config)
+        targets     (:targets config)
+        errno       (:errno config)
+        percent     (:percent config)]
+    (when-not (.startsWith ^Path file-path ^Path volume-path)
+      (throw (ex-info "file-path must be within volume-path"
+                      {:volume-path (:volume-path config)
+                       :file-path (:file-path config)})))
+    (when-not (and (sequential? methods)
+                   (seq methods)
+                   (every? io-methods methods))
+      (throw (ex-info "methods must contain :read, :write, or both"
+                      {:methods methods})))
+    (when-not (and (sequential? targets) (seq targets))
+      (throw (ex-info "targets must be a non-empty collection"
+                      {:targets targets})))
+    (when-not (and (integer? errno) (pos? errno))
+      (throw (ex-info "errno must be a positive integer" {:errno errno})))
+    (when-not (and (integer? percent) (<= 0 percent 100))
+      (throw (ex-info "percent must be an integer from 0 through 100"
+                      {:percent percent})))
+    (when-let [container-names (:container-names config)]
+      (when-not (and (sequential? container-names)
+                     (seq container-names)
+                     (every? #(and (string? %) (not (str/blank? %)))
+                             container-names))
+        (throw (ex-info "container-names must be a non-empty collection of names"
+                        {:container-names container-names}))))
+    ;; Validate this early instead of failing during pod discovery.
+    (k8s/label-selector (:pod-selector config))
+    config))
+
+(defn- make-manifest
+  [test targets {:keys [volume-path file-path methods errno percent
+                        container-names]}]
+  (yaml/generate-string
+   {:apiVersion "chaos-mesh.org/v1alpha1"
+    :kind "IOChaos"
+    :metadata {:name experiment-name
+               :namespace "chaos-mesh"}
+    :spec (cond-> {:action "fault"
+                   :mode "all"
+                   :selector {:pods {(k8s/namespace test) (vec targets)}}
+                   :volumePath volume-path
+                   :path file-path
+                   :methods (mapv (comp str/upper-case name) methods)
+                   :errno errno
+                   :percent percent}
+            container-names (assoc :containerNames (vec container-names)))}))
+
+(defn- stop!
+  [test]
+  (exp/stop! test {:name experiment-name :kind "iochaos"})
+  :file-io-healed)
+
+(defn- apply!
+  [test targets config dir]
+  (stop! test)
+  (try
+    (exp/apply! test (make-manifest test targets config) dir)
+    {:fault-kind :file-io
+     :targets (vec targets)
+     :volume-path (:volume-path config)
+     :file-path (:file-path config)
+     :methods (:methods config)
+     :errno (:errno config)
+     :percent (:percent config)}
+    (catch Exception e
+      (stop! test)
+      (throw e))))
+
+(defn- file-io-nemesis
+  [config dir]
+  (reify
+    n/Reflection
+    (fs [_this] [:start-file-io :stop-file-io])
+
+    n/Nemesis
+    (setup! [this test]
+      (stop! test)
+      this)
+
+    (invoke! [_this test {:keys [f value] :as op}]
+      (let [result
+            (case f
+              :start-file-io
+              (let [eligible (k8s/pod-names
+                              test
+                              {:selector (:pod-selector config)})
+                    targets  (exp/select-targets eligible value)]
+                (when (empty? targets)
+                  (throw (ex-info "file I/O fault selected no eligible pods"
+                                  {:pod-selector (:pod-selector config)
+                                   :target-spec value
+                                   :eligible-pods eligible})))
+                (apply! test targets config dir))
+
+              :stop-file-io
+              (stop! test))]
+        (assoc op :value result)))
+
+    (teardown! [_this test]
+      (stop! test))))
+
+(defn file-io-package
+  "Builds a package that makes READ and/or WRITE calls return an errno. Required
+  options under :file-io are :volume-path and :file-path."
+  [opts]
+  (let [needed? (contains? (:faults opts) :file-io)
+        config  (when needed? (validate-config (:file-io opts)))
+        targets (:targets config)
+        start   (fn [_test _context]
+                  {:type :info
+                   :f :start-file-io
+                   :value (rand-nth targets)})
+        stop    {:type :info :f :stop-file-io :value nil}
+        gen     (when needed?
+                  (->> (gen/flip-flop start (gen/repeat stop))
+                       (gen/stagger (:interval opts jn/default-interval))))]
+    {:generator gen
+     :final-generator (when needed? stop)
+     :nemesis (file-io-nemesis config (:dir opts))
+     :perf #{{:name "file-io"
+              :start #{:start-file-io}
+              :stop #{:stop-file-io}
+              :color "#E6A8D7"}}}))

@@ -1,7 +1,8 @@
 (ns jepsen.k8s.chaos-mesh.core-test
   (:require [clojure.test :refer [deftest is]]
             [jepsen.k8s.chaos-mesh.core :as cm]
-            [jepsen.k8s.exec :as e]))
+            [jepsen.k8s.exec :as e]
+            [jepsen.nemesis :as n]))
 
 (deftest setup-test
   (let [calls (atom [])]
@@ -31,3 +32,17 @@
                :--timeout "60s"
                :--ignore-not-found]]
              @calls)))))
+
+(deftest file-io-package-test
+  (let [package (cm/nemesis-package
+                 nil
+                 10
+                 [:file-io]
+                 {:file-io
+                  {:volume-path "/var/lib/postgresql/data"
+                   :file-path "/var/lib/postgresql/data/pg_wal/**/*"
+                   :pod-selector {:app "postgres"}}})]
+    (is (some? (:generator package)))
+    (is (= #{:start-file-io :stop-file-io}
+           (set (filter #{:start-file-io :stop-file-io}
+                        (n/fs (:nemesis package))))))))

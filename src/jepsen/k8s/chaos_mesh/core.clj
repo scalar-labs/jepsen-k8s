@@ -2,6 +2,7 @@
   "Composing Jepsen nemeses with k8s/Chaos Mesh backends."
   (:require [jepsen.k8s.chaos-mesh
              [clock :as clock]
+             [file-io :as file-io]
              [network :as network]
              [pod :as pod]]
             [jepsen.k8s.helm :as helm]
@@ -61,20 +62,37 @@
 
 (defn nemesis-package
   "Nemeses with Chaos Mesh backends.
-  Supported faults: :pause, :kill."
-  [db interval faults]
-  (let [opts {:db db
-              :interval interval
-              :faults (set faults)
-              :partition {:targets [:one :majority :majorities-ring :minority-third]}
-              :packet {:targets [:one :minority :majority :minority-third :all]
-                       :behaviors (reduce (fn [acc [k v]] (conj acc {k v}))
-                                          []
-                                          net/all-packet-behaviors)}
-              :kill {:targets [:one]}
-              :pause {:targets [:one]}
-              :dir (System/getProperty "java.io.tmpdir")}]
-    (jn/compose-packages [(network/partition-package opts)
-                          (network/packet-package opts)
-                          (clock/clock-package opts)
-                          (pod/pod-package opts)])))
+
+  The optional fourth argument configures individual fault packages. For a
+  :file-io fault it must contain:
+
+    {:file-io {:volume-path \"/mounted/volume\"
+               :file-path   \"/mounted/volume/path/**/*\"}}"
+  ([db interval faults]
+   (nemesis-package db interval faults {}))
+  ([db interval faults options]
+   (let [opts (-> (or options {})
+                  (assoc :db db
+                         :interval interval
+                         :faults (set faults)
+                         :dir (or (:dir options)
+                                  (System/getProperty "java.io.tmpdir")))
+                  (update :partition
+                          #(merge {:targets [:one :majority :majorities-ring
+                                             :minority-third]}
+                                  %))
+                  (update :packet
+                          #(merge {:targets [:one :minority :majority
+                                             :minority-third :all]
+                                   :behaviors
+                                   (reduce (fn [acc [k v]] (conj acc {k v}))
+                                           []
+                                           net/all-packet-behaviors)}
+                                  %))
+                  (update :kill #(merge {:targets [:one]} %))
+                  (update :pause #(merge {:targets [:one]} %)))]
+     (jn/compose-packages [(network/partition-package opts)
+                           (network/packet-package opts)
+                           (clock/clock-package opts)
+                           (pod/pod-package opts)
+                           (file-io/file-io-package opts)]))))
