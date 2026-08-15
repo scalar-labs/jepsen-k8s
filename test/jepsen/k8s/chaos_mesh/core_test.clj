@@ -44,6 +44,30 @@
                   (drop-while #(not= :--set %))
                   vec))))))
 
+(defn- set-args
+  "The values of the --set flags in a recorded helm call, in order."
+  [call]
+  (->> (partition 2 1 call)
+       (keep (fn [[flag value]] (when (= :--set flag) value)))))
+
+(deftest setup-orders-set-args-test
+  (testing "--set flags are sorted by key whatever order the map iterates in"
+    (let [calls (atom [])
+          ;; Ten keys, inserted in reverse. That is enough to spill past the
+          ;; array-map threshold, so iteration order is neither the order they
+          ;; were written in nor sorted order.
+          opts  (into {} (for [i (range 9 -1 -1)] [(keyword (str "k" i)) i]))]
+      (with-redefs [k8s/nodes (fn [_test] (nodes-running "containerd://2.2.0"))
+                    e/helm! (fn [_test & args]
+                              (swap! calls conj (into [:helm] args))
+                              "ok")]
+        (cm/setup! {} {:set opts}))
+      (is (= ["chaosDaemon.runtime=containerd"
+              "chaosDaemon.socketPath=/run/containerd/containerd.sock"
+              "k0=0" "k1=1" "k2=2" "k3=3" "k4=4"
+              "k5=5" "k6=6" "k7=7" "k8=8" "k9=9"]
+             (set-args (second @calls)))))))
+
 (deftest detect-runtime-values-test
   (testing "maps the runtime Kubernetes reports to the daemon's Helm values"
     (doseq [[reported expected]

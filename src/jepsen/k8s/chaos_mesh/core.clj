@@ -93,7 +93,8 @@
                     :-n namespace :--create-namespace
                     :--version version]
                    (mapcat #(vector :-f %) values)
-                   (mapcat (fn [[k v]] [:--set (str (name k) "=" v)]) set)))))
+                   (mapcat (fn [[k v]] [:--set (str (name k) "=" v)])
+                           (sort-by key set))))))
 
 (defn wipe!
   "Uninstalls Chaos Mesh with Helm.
