@@ -104,6 +104,48 @@
                                         :f :start-file-io
                                         :value :one}))))))
 
+(defn- node-list
+  [& archs]
+  {:items (map-indexed (fn [i arch]
+                         {:metadata {:name (str "node-" i)}
+                          :status {:nodeInfo {:architecture arch}}})
+                       archs)})
+
+(deftest node-arch-check-test
+  (let [nemesis (file-io-nemesis (validate-config config) "/tmp")
+        setup!  (fn [nodes]
+                  (with-redefs [k8s/nodes (fn [& _] nodes)
+                                exp/stop! (fn [& _] nil)]
+                    (n/setup! nemesis {:k8s {:namespace "database"}})))]
+    (testing "an all-amd64 cluster sets up"
+      (is (some? (setup! (node-list "amd64" "amd64" "amd64")))))
+    (testing "any arm64 node stops the test before it runs"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"needs every node on amd64"
+                            (setup! (node-list "amd64" "arm64")))))
+    (testing "an unreported architecture is not assumed to be amd64"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"needs every node on amd64"
+                            (setup! (node-list "amd64" nil)))))
+    (testing "a cluster with no nodes stops the test too"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"found no nodes"
+                            (setup! (node-list)))))
+    (testing "the error names the offending nodes"
+      (is (= {"node-1" "arm64"}
+             (try (setup! (node-list "amd64" "arm64"))
+                  (catch clojure.lang.ExceptionInfo e
+                    (:unsupported-nodes (ex-data e)))))))))
+
+(deftest node-arch-unchecked-without-the-fault-test
+  (testing "a test that doesn't use the file I/O fault runs on any architecture"
+    (let [package (file-io/file-io-package {:faults #{:kill} :dir "/tmp"})
+          checked (atom false)]
+      (with-redefs [k8s/nodes (fn [& _] (reset! checked true) (node-list "arm64"))
+                    exp/stop! (fn [& _] nil)]
+        (n/setup! (:nemesis package) {:k8s {:namespace "database"}}))
+      (is (false? @checked)))))
+
 (deftest package-test
   (let [package (file-io/file-io-package
                  {:faults #{:file-io}

@@ -11,6 +11,31 @@
 
 (def ^:private experiment-name "file-io-fault")
 (def ^:private io-methods #{:read :write})
+(def ^:private required-arch "amd64")
+
+(defn- check-node-arch!
+  "Throws unless every node in the cluster is amd64.
+
+  IOChaos injects `toda`, whose binary is x86-64 even in the arm64 chaos-daemon
+  image, so on any other architecture it dies under emulation and no fault is
+  ever applied."
+  [test]
+  (let [archs (->> (k8s/nodes test)
+                   :items
+                   (mapv (juxt #(get-in % [:metadata :name])
+                               #(get-in % [:status :nodeInfo :architecture]))))
+        wrong (remove (comp #{required-arch} second) archs)]
+    (when (empty? archs)
+      (throw (ex-info "the file I/O fault found no nodes to check the architecture of"
+                      {:required-arch required-arch})))
+    (when (seq wrong)
+      (throw (ex-info (str "the file I/O fault needs every node on "
+                           required-arch
+                           "; Chaos Mesh's toda binary is x86-64 even in the "
+                           "arm64 chaos-daemon image, so no fault would inject")
+                      {:required-arch required-arch
+                       :nodes (into {} archs)
+                       :unsupported-nodes (into {} wrong)})))))
 
 (defn- path
   [option value]
@@ -111,6 +136,8 @@
 
     n/Nemesis
     (setup! [this test]
+      (when config
+        (check-node-arch! test))
       (stop! test)
       this)
 
@@ -138,7 +165,9 @@
 
 (defn file-io-package
   "Builds a package that makes READ and/or WRITE calls return an errno. Required
-  options under :file-io are :volume-path and :file-path."
+  options under :file-io are :volume-path and :file-path.
+
+  Every node must be amd64; setup! throws otherwise. See check-node-arch!."
   [opts]
   (let [needed? (contains? (:faults opts) :file-io)
         config  (when needed? (validate-config (:file-io opts)))
