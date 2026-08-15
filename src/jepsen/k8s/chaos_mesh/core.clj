@@ -111,6 +111,16 @@
               :--timeout timeout
               :--ignore-not-found))
 
+(def default-fault-opts
+  "Per-fault defaults. Options passed to nemesis-package are merged over these,
+  one level deep, so a caller overriding a single key of a fault keeps the rest
+  of that fault's defaults."
+  {:partition {:targets [:one :majority :majorities-ring :minority-third]}
+   :packet    {:targets [:one :minority :majority :minority-third :all]
+               :behaviors (mapv (fn [[k v]] {k v}) net/all-packet-behaviors)}
+   :kill      {:targets [:one]}
+   :pause     {:targets [:one]}})
+
 (defn nemesis-package
   "Nemeses with Chaos Mesh backends.
 
@@ -122,26 +132,12 @@
   ([db interval faults]
    (nemesis-package db interval faults {}))
   ([db interval faults options]
-   (let [opts (-> (or options {})
+   (let [opts (-> (merge-with merge default-fault-opts options)
                   (assoc :db db
                          :interval interval
                          :faults (set faults)
                          :dir (or (:dir options)
-                                  (System/getProperty "java.io.tmpdir")))
-                  (update :partition
-                          #(merge {:targets [:one :majority :majorities-ring
-                                             :minority-third]}
-                                  %))
-                  (update :packet
-                          #(merge {:targets [:one :minority :majority
-                                             :minority-third :all]
-                                   :behaviors
-                                   (reduce (fn [acc [k v]] (conj acc {k v}))
-                                           []
-                                           net/all-packet-behaviors)}
-                                  %))
-                  (update :kill #(merge {:targets [:one]} %))
-                  (update :pause #(merge {:targets [:one]} %)))]
+                                  (System/getProperty "java.io.tmpdir"))))]
      (jn/compose-packages [(network/partition-package opts)
                            (network/packet-package opts)
                            (clock/clock-package opts)
