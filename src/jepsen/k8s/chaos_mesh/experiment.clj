@@ -103,4 +103,8 @@
         :all            pods
         (if (sequential? target-spec)
           (filterv (set pods) target-spec)
-          (throw (ex-info "unknown target spec" {:spec target-spec})))))))
+          (throw (ex-info (str "unknown target spec; expected nil, :one, "
+                               ":minority, :majority, :minority-third, :all, "
+                               "or a collection of pod names")
+                          {:spec target-spec
+                           :type (type target-spec)})))))))
