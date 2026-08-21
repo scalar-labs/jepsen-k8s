@@ -71,7 +71,6 @@
            (try (config-with-targets [:one "pod-0" 7])
                 (catch clojure.lang.ExceptionInfo e (:invalid (ex-data e))))))))
 
-
 (deftest manifest-test
   (let [manifest (-> (make-manifest
                       {:k8s {:namespace "database"}}
