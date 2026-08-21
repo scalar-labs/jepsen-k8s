@@ -12,6 +12,21 @@
 (def ^:private experiment-name "file-io-fault")
 (def ^:private io-methods #{:read :write})
 (def ^:private required-arch "amd64")
+(def ^:private target-specs
+  #{:one :minority :majority :minority-third :all})
+
+(defn- valid-target?
+  "Is t one element of :targets, i.e. one whole spec an op can be given?
+
+  Each op picks one element of :targets at random and hands that element to
+  select-targets, so a list of pod names has to be nested to survive the pick:
+  [[\"pod-0\" \"pod-1\"]], not [\"pod-0\" \"pod-1\"]."
+  [t]
+  (or (nil? t)
+      (contains? target-specs t)
+      (and (sequential? t)
+           (seq t)
+           (every? #(and (string? %) (not (str/blank? %))) t))))
 
 (defn- check-node-arch!
   "Throws unless every node in the cluster is amd64.
@@ -73,6 +88,17 @@
     (when-not (and (sequential? targets) (seq targets))
       (throw (ex-info "targets must be a non-empty collection"
                       {:targets targets})))
+    ;; A bare pod name here passes every shape check and then throws on the
+    ;; first op, which is exactly what this function exists to prevent.
+    (when-let [invalid (seq (remove valid-target? targets))]
+      (throw (ex-info (str "each element of targets must be nil, :one, "
+                           ":minority, :majority, :minority-third, :all, or a "
+                           "collection of pod names; note that a list of pod "
+                           "names has to be nested, as in "
+                           "[[\"pod-0\" \"pod-1\"]], because each op uses one "
+                           "element of targets as its whole spec")
+                      {:targets targets
+                       :invalid (vec invalid)})))
     (when-not (and (integer? errno) (pos? errno))
       (throw (ex-info "errno must be a positive integer" {:errno errno})))
     (when-not (and (integer? percent) (<= 0 percent 100))
@@ -136,9 +162,17 @@
 
     n/Nemesis
     (setup! [this test]
+      ;; config is nil unless :file-io is among the faults, and the package
+      ;; builds this nemesis either way, so a run that never asked for the
+      ;; fault shouldn't touch the cluster at all.
       (when config
+        ;; Clear a leftover fault before the arch check, not after: the check
+        ;; throws on an unreadable cluster as readily as on a wrong
+        ;; architecture, and jepsen derefs the setup future outside its
+        ;; try/finally, so a throw here means teardown! never runs. Anything
+        ;; stop! would have removed would stay applied for good.
+        (stop! test)
         (check-node-arch! test))
-      (stop! test)
       this)
 
     (invoke! [_this test {:keys [f value] :as op}]
@@ -161,11 +195,35 @@
         (assoc op :value result)))
 
     (teardown! [_this test]
-      (stop! test))))
+      (when config
+        (stop! test)))))
 
 (defn file-io-package
-  "Builds a package that makes READ and/or WRITE calls return an errno. Required
-  options under :file-io are :volume-path and :file-path.
+  "Builds a package that makes READ and/or WRITE calls return an errno.
+
+  Required options under :file-io:
+
+    :volume-path      Absolute path of the mounted volume to fault, e.g.
+                      \"/var/lib/postgresql/data\".
+    :file-path        Absolute path, or glob, within :volume-path to fault,
+                      e.g. \"/var/lib/postgresql/data/pg_wal/**/*\".
+
+  Optional:
+
+    :pod-selector     Label map choosing which pods are eligible, e.g.
+                      {:app \"postgres\"}. Defaults to every pod in the test
+                      namespace, which is the fault's whole blast radius, so
+                      it is worth setting.
+    :container-names  Containers within those pods to fault. Defaults to all.
+    :methods          Any of [:read :write]. Defaults to both.
+    :errno            Positive errno the faulted calls return. Defaults to 5,
+                      EIO.
+    :percent          Percentage of matching calls to fail, 0-100. Defaults
+                      to 100.
+    :targets          Specs to pick from, one per op. Each element is nil,
+                      :one, :minority, :majority, :minority-third, :all, or a
+                      nested collection of pod names such as
+                      [[\"pod-0\" \"pod-1\"]]. Defaults to [:one].
 
   Every node must be amd64; setup! throws otherwise. See check-node-arch!."
   [opts]

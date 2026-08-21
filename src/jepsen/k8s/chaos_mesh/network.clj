@@ -1,6 +1,7 @@
 (ns jepsen.k8s.chaos-mesh.network
   "NetworkChaos helpers.
-  Supported faults: :partition, :delay, :loss, :corrupt, :duplicate, :reorder, :rate."
+  Supported faults: :partition and :packet. The packet fault's behaviors are
+  :delay, :loss, :corrupt, :duplicate, :reorder and :rate."
   (:require [clj-yaml.core :as yaml]
             [clojure.string :as str]
             [clojure.tools.logging :refer [warn]]

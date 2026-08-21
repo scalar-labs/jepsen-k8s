@@ -42,6 +42,36 @@
                                             :file-path "/data/file"
                                             :methods [:read :fsync]})))))
 
+(defn- config-with-targets
+  [targets]
+  (validate-config {:volume-path "/data"
+                    :file-path "/data/**/*"
+                    :targets targets}))
+
+(deftest target-validation-test
+  (testing "the specs an op can be handed are accepted"
+    (doseq [targets [[:one] [:all] [nil]
+                     [:one :minority :majority :minority-third :all]
+                     ;; A pod-name list has to be nested: an op is handed one
+                     ;; element of :targets as its whole spec.
+                     [["pod-0" "pod-1"]]
+                     [:one ["pod-0"]]]]
+      (is (= targets (:targets (config-with-targets targets))) (str targets))))
+
+  (testing "a bare pod name is rejected at config time, not on the first op"
+    ;; ["pod-0" "pod-1"] passes every shape check and then throws from
+    ;; select-targets once the run is under way, because rand-nth hands it the
+    ;; string "pod-0" rather than the list.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"has to be nested"
+                          (config-with-targets ["pod-0" "pod-1"]))))
+
+  (testing "the error names just the offending elements"
+    (is (= ["pod-0" 7]
+           (try (config-with-targets [:one "pod-0" 7])
+                (catch clojure.lang.ExceptionInfo e (:invalid (ex-data e))))))))
+
+
 (deftest manifest-test
   (let [manifest (-> (make-manifest
                       {:k8s {:namespace "database"}}
@@ -145,6 +175,48 @@
                     exp/stop! (fn [& _] nil)]
         (n/setup! (:nemesis package) {:k8s {:namespace "database"}}))
       (is (false? @checked)))))
+
+(defn- record-lifecycle
+  "Runs f with stop! and the node list stubbed, returning the calls each made
+  in the order they happened."
+  [nodes f]
+  (let [calls (atom [])]
+    (with-redefs [exp/stop! (fn [& _] (swap! calls conj :stop!) nil)
+                  k8s/nodes (fn [& _] (swap! calls conj :get-nodes) nodes)]
+      (f))
+    @calls))
+
+(deftest setup-clears-leftovers-before-checking-arch-test
+  (let [nemesis (file-io-nemesis (validate-config config) "/tmp")
+        setup!  #(n/setup! nemesis {:k8s {:namespace "database"}})]
+    (testing "a leftover fault is cleared before the cluster is inspected"
+      ;; jepsen derefs the setup future outside its try/finally, so a throw
+      ;; here means teardown! never runs. Anything stop! would have removed
+      ;; would stay applied for the rest of the cluster's life.
+      (is (= [:stop! :get-nodes]
+             (record-lifecycle (node-list "amd64") setup!))))
+    (testing "including when the check then throws"
+      (is (= [:stop! :get-nodes]
+             (record-lifecycle
+              (node-list "arm64")
+              #(is (thrown? clojure.lang.ExceptionInfo (setup!)))))))))
+
+(deftest lifecycle-untouched-without-the-fault-test
+  (testing "a run that never asked for the fault issues no cleanup either way"
+    (let [package (file-io/file-io-package {:faults #{:kill} :dir "/tmp"})
+          nemesis (:nemesis package)
+          test    {:k8s {:namespace "database"}}]
+      (is (= [] (record-lifecycle (node-list "amd64") #(n/setup! nemesis test))))
+      (is (= [] (record-lifecycle (node-list "amd64")
+                                  #(n/teardown! nemesis test)))))))
+
+(deftest teardown-clears-the-fault-test
+  (testing "a run that did ask for it still cleans up"
+    (let [nemesis (file-io-nemesis (validate-config config) "/tmp")]
+      (is (= [:stop!]
+             (record-lifecycle (node-list "amd64")
+                               #(n/teardown! nemesis
+                                             {:k8s {:namespace "database"}})))))))
 
 (deftest package-test
   (let [package (file-io/file-io-package
