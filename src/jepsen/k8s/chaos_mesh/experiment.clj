@@ -1,6 +1,7 @@
 (ns jepsen.k8s.chaos-mesh.experiment
   (:require [clojure.tools.logging :refer [warn]]
-            [jepsen.k8s.core :as k8s]))
+            [jepsen.k8s.core :as k8s]
+            [jepsen.util :as util]))
 
 (def ^:private ^:const MAX_RETRIES 5)
 (def ^:private ^:const SLEEP_MS 1000)
@@ -85,3 +86,25 @@
   (->> (k8s/pod-names test {})
        shuffle
        (take (inc (rand-int limit)))))
+
+(defn select-targets
+  "Selects live pods according to a Jepsen node specification. Explicit pod
+  collections are restricted to the supplied eligible pods."
+  [pods target-spec]
+  (let [pods (vec pods)]
+    (if (empty? pods)
+      []
+      (case target-spec
+        nil             (util/random-nonempty-subset pods)
+        :one            [(rand-nth pods)]
+        :minority       (take (dec (util/majority (count pods))) (shuffle pods))
+        :majority       (take (util/majority (count pods)) (shuffle pods))
+        :minority-third (take (util/minority-third (count pods)) (shuffle pods))
+        :all            pods
+        (if (sequential? target-spec)
+          (filterv (set pods) target-spec)
+          (throw (ex-info (str "unknown target spec; expected nil, :one, "
+                               ":minority, :majority, :minority-third, :all, "
+                               "or a collection of pod names")
+                          {:spec target-spec
+                           :type (type target-spec)})))))))
