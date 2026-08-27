@@ -68,20 +68,29 @@
                :--since "10m"]]
              @calls)))))
 
-(deftest collect-logs-skips-missing-logs-test
-  (let [dir (doto (io/file "target" "collect-logs-test")
-              (.mkdirs))
-        calls (atom [])]
+(defn- pod
+  [name containers]
+  {:metadata {:name name}
+   :spec {:containers (mapv #(hash-map :name %) containers)}})
+
+(defn- clean-dir!
+  [name]
+  (let [dir (doto (io/file "target" name) (.mkdirs))]
     (doseq [file (file-seq dir)
             :when (.isFile file)]
       (.delete file))
+    dir))
+
+(deftest collect-logs-skips-missing-logs-test
+  (let [dir (clean-dir! "collect-logs-test")
+        calls (atom [])]
     (with-redefs [e/kubectl! (fn [_test & args]
                                (swap! calls conj (vec args))
                                (case (first args)
                                  :get
                                  (json/generate-string
-                                  {:items [{:metadata {:name "db-0"}}
-                                           {:metadata {:name "db-1"}}]})
+                                  {:items [(pod "db-0" ["db"])
+                                           (pod "db-1" ["db"])]})
 
                                  :logs
                                  (if (= "db-0" (second args))
@@ -93,10 +102,36 @@
                                     :output-dir (.getPath dir)
                                     :previous? true})))
       (is (= "db-0 log"
-             (slurp (io/file dir "db-0.previous.log"))))
-      (is (not (.exists (io/file dir "db-1.previous.log"))))
-      (is (not (.exists (io/file dir "db-1.previous.log.error"))))
+             (slurp (io/file dir "db-0.db.previous.log"))))
+      (is (not (.exists (io/file dir "db-1.db.previous.log"))))
       (is (= [[:get :pod :-n "jepsen-test" :-l "app=db" :-o :json]
-              [:logs "db-0" :-n "jepsen-test" :--previous]
-              [:logs "db-1" :-n "jepsen-test" :--previous]]
+              [:logs "db-0" :-n "jepsen-test" :-c "db" :--previous]
+              [:logs "db-1" :-n "jepsen-test" :-c "db" :--previous]]
+             @calls)))))
+
+(deftest collect-logs-collects-every-container-test
+  (let [dir (clean-dir! "collect-logs-containers-test")
+        calls (atom [])]
+    ;; A pod with sidecars: kubectl logs without -c would fail on it, taking
+    ;; the database's own log down with it.
+    (with-redefs [e/kubectl! (fn [_test & args]
+                               (swap! calls conj (vec args))
+                               (case (first args)
+                                 :get
+                                 (json/generate-string
+                                  {:items [(pod "db-0" ["db" "logrotate" "ui"])]})
+
+                                 :logs
+                                 ;; (:logs <pod> :-n <ns> :-c <container>)
+                                 (str (second args) " " (nth args 5) " log")))]
+      (is (nil? (k8s/collect-logs! {:k8s {:namespace "jepsen-test"}}
+                                   {:selector {:app "db"}
+                                    :output-dir (.getPath dir)})))
+      (is (= "db-0 db log" (slurp (io/file dir "db-0.db.log"))))
+      (is (= "db-0 logrotate log" (slurp (io/file dir "db-0.logrotate.log"))))
+      (is (= "db-0 ui log" (slurp (io/file dir "db-0.ui.log"))))
+      (is (= [[:get :pod :-n "jepsen-test" :-l "app=db" :-o :json]
+              [:logs "db-0" :-n "jepsen-test" :-c "db"]
+              [:logs "db-0" :-n "jepsen-test" :-c "logrotate"]
+              [:logs "db-0" :-n "jepsen-test" :-c "ui"]]
              @calls)))))

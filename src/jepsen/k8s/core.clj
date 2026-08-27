@@ -99,19 +99,25 @@
   (kubectl-json! test :get :events :-n (or ns (namespace test))))
 
 (defn collect-logs!
-  "Collects logs for matching pods into output-dir."
+  "Collects logs for matching pods into output-dir, one file per container,
+  named <pod>.<container>[.previous].log."
   [test {:keys [namespace selector output-dir previous?]}]
   (.mkdirs (io/file output-dir))
-  (doseq [pod (pod-names test {:namespace namespace :selector selector})]
-    (let [path (io/file output-dir (str pod (when previous? ".previous") ".log"))]
+  (doseq [pod (:items (pods test {:namespace namespace :selector selector}))
+          :let [pod-name (get-in pod [:metadata :name])]
+          container (map :name (get-in pod [:spec :containers]))]
+    (let [path (io/file output-dir (str pod-name "." container
+                                        (when previous? ".previous") ".log"))]
       (try
         (spit path
               (pod-logs! test {:namespace namespace
-                               :pod pod
+                               :pod pod-name
+                               :container container
                                :previous? previous?}))
         (catch Exception e
           (warn "skipping pod logs"
-                {:pod pod
+                {:pod pod-name
+                 :container container
                  :namespace namespace
                  :previous? previous?
                  :error (.getMessage e)}))))))
