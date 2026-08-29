@@ -69,9 +69,19 @@
              @calls)))))
 
 (defn- pod
-  [name containers]
-  {:metadata {:name name}
-   :spec {:containers (mapv #(hash-map :name %) containers)}})
+  ([name containers] (pod name containers nil))
+  ([name containers init-containers]
+   {:metadata {:name name}
+    :spec (cond-> {:containers (mapv #(hash-map :name %) containers)}
+            init-containers (assoc :initContainers
+                                   (mapv #(hash-map :name %) init-containers)))}))
+
+(defn- logs-container
+  "The container name a (:logs ...) call asked for, found by scanning for the
+  flag rather than by position so optional args can't shift it out from under
+  us."
+  [args]
+  (second (drop-while #(not= :-c %) args)))
 
 (defn- clean-dir!
   [name]
@@ -112,26 +122,44 @@
 (deftest collect-logs-collects-every-container-test
   (let [dir (clean-dir! "collect-logs-containers-test")
         calls (atom [])]
-    ;; A pod with sidecars: kubectl logs without -c would fail on it, taking
-    ;; the database's own log down with it.
+    ;; A pod with sidecars and an init container: kubectl logs without -c would
+    ;; fail on it, taking the database's own log down with it. One container
+    ;; fails here to pin down that a failure is scoped to its own container and
+    ;; doesn't drop its siblings.
     (with-redefs [e/kubectl! (fn [_test & args]
                                (swap! calls conj (vec args))
                                (case (first args)
                                  :get
                                  (json/generate-string
-                                  {:items [(pod "db-0" ["db" "logrotate" "ui"])]})
+                                  {:items [(pod "db-0"
+                                                ["db" "logrotate" "ui"]
+                                                ["init-chmod-data"])]})
 
                                  :logs
-                                 ;; (:logs <pod> :-n <ns> :-c <container>)
-                                 (str (second args) " " (nth args 5) " log")))]
+                                 (let [container (logs-container args)]
+                                   (if (= "logrotate" container)
+                                     (throw (ex-info "container not found"
+                                                     {:container container}))
+                                     (str (second args) " " container " log")))))]
       (is (nil? (k8s/collect-logs! {:k8s {:namespace "jepsen-test"}}
                                    {:selector {:app "db"}
                                     :output-dir (.getPath dir)})))
       (is (= "db-0 db log" (slurp (io/file dir "db-0.db.log"))))
-      (is (= "db-0 logrotate log" (slurp (io/file dir "db-0.logrotate.log"))))
       (is (= "db-0 ui log" (slurp (io/file dir "db-0.ui.log"))))
+      (is (= "db-0 init-chmod-data log"
+             (slurp (io/file dir "db-0.init-chmod-data.log"))))
+      (is (not (.exists (io/file dir "db-0.logrotate.log"))))
       (is (= [[:get :pod :-n "jepsen-test" :-l "app=db" :-o :json]
               [:logs "db-0" :-n "jepsen-test" :-c "db"]
               [:logs "db-0" :-n "jepsen-test" :-c "logrotate"]
-              [:logs "db-0" :-n "jepsen-test" :-c "ui"]]
+              [:logs "db-0" :-n "jepsen-test" :-c "ui"]
+              [:logs "db-0" :-n "jepsen-test" :-c "init-chmod-data"]]
              @calls)))))
+
+(deftest collect-logs-survives-a-failed-listing-test
+  (let [dir (clean-dir! "collect-logs-listing-test")]
+    (with-redefs [e/kubectl! (fn [_test & _args]
+                               (throw (ex-info "connection refused" {})))]
+      (is (nil? (k8s/collect-logs! {:k8s {:namespace "jepsen-test"}}
+                                   {:selector {:app "db"}
+                                    :output-dir (.getPath dir)}))))))
