@@ -162,16 +162,13 @@
 
     n/Nemesis
     (setup! [this test]
-      ;; config is nil unless :file-io is among the faults, and the package
-      ;; builds this nemesis either way, so a run that never asked for the
-      ;; fault shouldn't touch the cluster at all.
+      ;; Sweep even when this run didn't select :file-io, like the other kinds:
+      ;; experiment-name is a fixed literal, so a leftover re-attaches under a
+      ;; later run and gets blamed on whichever nemesis that one selected.
+      (stop! test)
+      ;; Second: a throw here means teardown! never runs, so anything stop!
+      ;; would have removed would stay applied for good.
       (when config
-        ;; Clear a leftover fault before the arch check, not after: the check
-        ;; throws on an unreadable cluster as readily as on a wrong
-        ;; architecture, and jepsen derefs the setup future outside its
-        ;; try/finally, so a throw here means teardown! never runs. Anything
-        ;; stop! would have removed would stay applied for good.
-        (stop! test)
         (check-node-arch! test))
       this)
 
@@ -195,8 +192,7 @@
         (assoc op :value result)))
 
     (teardown! [_this test]
-      (when config
-        (stop! test)))))
+      (stop! test))))
 
 (defn file-io-package
   "Builds a package that makes READ and/or WRITE calls return an errno.
