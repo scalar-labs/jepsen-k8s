@@ -164,10 +164,11 @@
     (setup! [this test]
       ;; Sweep even when this run didn't select :file-io, like the other kinds:
       ;; experiment-name is a fixed literal, so a leftover re-attaches under a
-      ;; later run and gets blamed on whichever nemesis that one selected.
+      ;; later run and gets blamed on whichever nemesis that one selected. It
+      ;; has to precede the arch check: that check throws on an unreadable
+      ;; cluster as readily as on a wrong architecture, and a throw there means
+      ;; teardown! never runs.
       (stop! test)
-      ;; Second: a throw here means teardown! never runs, so anything stop!
-      ;; would have removed would stay applied for good.
       (when config
         (check-node-arch! test))
       this)
