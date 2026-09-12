@@ -62,10 +62,10 @@ Jepsen test
   (chaos-mesh/nemesis-package db interval faults))
 ```
 
-Supported faults are `:partition`, `:packet`, `:kill`, `:pause`, `:clock`, and
-`:file-io`. An optional fourth argument configures individual fault packages.
-Each fault key takes a nested map, merged one level deep over the defaults, so
-overriding one key of a fault keeps the rest:
+Supported faults are `:partition`, `:packet`, `:kill`, `:pause`, `:clock`,
+`:file-io`, and `:stress`. An optional fourth argument configures individual
+fault packages. Each fault key takes a nested map, merged one level deep over
+the defaults, so overriding one key of a fault keeps the rest:
 
 ```clojure
 (def nemesis
@@ -74,7 +74,15 @@ overriding one key of a fault keeps the rest:
     {:kill    {:targets [:all]}
      :file-io {:volume-path "/var/lib/postgresql/data"
                :file-path   "/var/lib/postgresql/data/pg_wal/**/*"
-               :pod-selector {:app "postgres"}}}))
+               :pod-selector {:app "postgres"}}
+     :stress  {:pod-selector {:app "postgres"}
+               :container-names ["postgres"]
+               :targets [:one]
+               :cpu {:workers 2 :load 80}
+               :memory {:workers 1
+                        :size "256MB"
+                        :time "10s"
+                        :oom-score-adj 0}}}))
 ```
 
 `:file-io` requires `:volume-path` and `:file-path`. Its optional keys are
@@ -84,6 +92,15 @@ fault's blast radius, so it is worth setting), `:container-names` (all),
 `:targets` (`[:one]`). A `:targets` element that lists pod names has to be
 nested, as in `[["pod-0" "pod-1"]]`, because each op uses one element as its
 whole spec.
+
+`:stress` requires `:cpu`, `:memory`, or both. CPU options are `:workers`
+(default 1) and `:load` (default 100, from 0 through 100). Memory requires
+`:size` (for example, `"256MB"` or `"25%"`) and optionally accepts `:workers`
+(default 1), `:time` (a linear ramp duration), and `:oom-score-adj` (-1000
+through 1000). Shared options are `:pod-selector` (all pods in the test
+namespace), `:container-names` (all containers), and `:targets` (`[:one]`).
+Supplying both stressors applies both to the same selected pods. As with
+`:file-io`, an explicit pod-name target must be nested.
 
 ## Notes
 
