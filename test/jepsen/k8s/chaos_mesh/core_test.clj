@@ -235,3 +235,17 @@
     (is (= #{:start-file-io :stop-file-io}
            (set (filter #{:start-file-io :stop-file-io}
                         (n/fs (:nemesis package))))))))
+
+(deftest stress-package-test
+  (let [package (cm/nemesis-package
+                 nil
+                 10
+                 [:stress]
+                 {:stress
+                  {:pod-selector {:app "postgres"}
+                   :cpu {:workers 2 :load 80}
+                   :memory {:workers 1 :size "256MB"}}})]
+    (is (some? (:generator package)))
+    (is (= #{:start-stress :stop-stress}
+           (set (filter #{:start-stress :stop-stress}
+                        (n/fs (:nemesis package))))))))

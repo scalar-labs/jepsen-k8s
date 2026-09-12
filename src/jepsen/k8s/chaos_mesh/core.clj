@@ -7,7 +7,8 @@
              [clock :as clock]
              [file-io :as file-io]
              [network :as network]
-             [pod :as pod]]
+             [pod :as pod]
+             [stress :as stress]]
             [jepsen.k8s.core :as k8s]
             [jepsen.k8s.helm :as helm]
             [jepsen.nemesis.combined :as jn]
@@ -225,7 +226,8 @@
 (defn nemesis-package
   "Nemeses with Chaos Mesh backends.
 
-  Supported faults: :partition, :packet, :kill, :pause, :clock, :file-io.
+  Supported faults: :partition, :packet, :kill, :pause, :clock, :file-io,
+  :stress.
 
   The optional fourth argument configures individual fault packages. Each fault
   key takes a nested map, merged one level deep over the defaults in
@@ -233,10 +235,14 @@
 
     {:kill    {:targets [:all]}
      :file-io {:volume-path \"/mounted/volume\"
-               :file-path   \"/mounted/volume/path/**/*\"}}
+               :file-path   \"/mounted/volume/path/**/*\"}
+     :stress  {:cpu {:workers 2 :load 80}
+               :memory {:workers 1 :size \"256MB\"}}}
 
   :volume-path and :file-path are required for a :file-io fault; see
-  jepsen.k8s.chaos-mesh.file-io/file-io-package for the rest of its options."
+  jepsen.k8s.chaos-mesh.file-io/file-io-package for the rest of its options.
+  :stress requires :cpu, :memory, or both; see
+  jepsen.k8s.chaos-mesh.stress/stress-package for its options."
   ([db interval faults]
    (nemesis-package db interval faults {}))
   ([db interval faults options]
@@ -250,4 +256,5 @@
                            (network/packet-package opts)
                            (clock/clock-package opts)
                            (pod/pod-package opts)
-                           (file-io/file-io-package opts)]))))
+                           (file-io/file-io-package opts)
+                           (stress/stress-package opts)]))))
