@@ -200,14 +200,16 @@
               (node-list "arm64")
               #(is (thrown? clojure.lang.ExceptionInfo (setup!)))))))))
 
-(deftest lifecycle-untouched-without-the-fault-test
-  (testing "a run that never asked for the fault issues no cleanup either way"
+(deftest leftovers-cleared-without-the-fault-test
+  (testing "a run that never asked for the fault still sweeps a leftover one"
     (let [package (file-io/file-io-package {:faults #{:kill} :dir "/tmp"})
           nemesis (:nemesis package)
           test    {:k8s {:namespace "database"}}]
-      (is (= [] (record-lifecycle (node-list "amd64") #(n/setup! nemesis test))))
-      (is (= [] (record-lifecycle (node-list "amd64")
-                                  #(n/teardown! nemesis test)))))))
+      (is (= [:stop!]
+             (record-lifecycle (node-list "amd64") #(n/setup! nemesis test))))
+      (is (= [:stop!]
+             (record-lifecycle (node-list "amd64")
+                               #(n/teardown! nemesis test)))))))
 
 (deftest teardown-clears-the-fault-test
   (testing "a run that did ask for it still cleans up"
