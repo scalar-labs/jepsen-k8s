@@ -143,6 +143,23 @@
         (is (= "/tmp" (:dir @applied)))
         (is (= 1 @stops))))))
 
+(deftest nemesis-defaults-to-all-pods-test
+  (let [pod-query (atom ::unset)
+        config    (validate-config (dissoc config :pod-selector))
+        nemesis   (stress-nemesis config "/tmp")]
+    (is (not (contains? config :pod-selector)))
+    (with-redefs [k8s/pod-names
+                  (fn [_test opts]
+                    (reset! pod-query opts)
+                    ["postgres-0"])
+                  exp/stop!  (fn [& _])
+                  exp/apply! (fn [& _])]
+      (let [result (n/invoke! nemesis
+                              {:k8s {:namespace "database"}}
+                              {:type :info :f :start-stress :value :one})]
+        (is (= {:selector nil} @pod-query))
+        (is (= ["postgres-0"] (get-in result [:value :targets])))))))
+
 (deftest nemesis-rejects-empty-selection-test
   (let [nemesis (stress-nemesis (validate-config config) "/tmp")]
     (with-redefs [k8s/pod-names (fn [& _] [])]
@@ -177,13 +194,13 @@
         (n/setup! nemesis {:k8s {:namespace "database"}})
         (n/teardown! nemesis {:k8s {:namespace "database"}}))
       (is (= [:stop! :stop!] @calls))))
-  (testing "an unused package does not touch the cluster"
+  (testing "a run that never asked for the fault still sweeps a leftover one"
     (let [calls   (atom [])
           package (stress/stress-package {:faults #{:kill} :dir "/tmp"})]
       (with-redefs [exp/stop! (fn [& _] (swap! calls conj :stop!))]
         (n/setup! (:nemesis package) {:k8s {:namespace "database"}})
         (n/teardown! (:nemesis package) {:k8s {:namespace "database"}}))
-      (is (empty? @calls)))))
+      (is (= [:stop! :stop!] @calls)))))
 
 (deftest package-test
   (let [package (stress/stress-package

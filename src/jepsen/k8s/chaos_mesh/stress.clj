@@ -151,10 +151,8 @@
 
     n/Nemesis
     (setup! [this test]
-      ;; The package always builds this nemesis, even when :stress was not
-      ;; requested. Only a configured stress fault should touch the cluster.
-      (when config
-        (stop! test))
+      ;; Always sweep a leftover experiment, even without :stress.
+      (stop! test)
       this)
 
     (invoke! [_this test {:keys [f value] :as op}]
@@ -177,8 +175,7 @@
         (assoc op :value result)))
 
     (teardown! [_this test]
-      (when config
-        (stop! test)))))
+      (stop! test))))
 
 (defn stress-package
   "Builds a package that applies CPU load, memory pressure, or both.
