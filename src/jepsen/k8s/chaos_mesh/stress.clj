@@ -53,7 +53,7 @@
   [memory]
   (when-not (map? memory)
     (throw (ex-info "memory must be a map" {:memory memory})))
-  (let [{:keys [workers size time oom-score-adj] :as memory}
+  (let [{:keys [workers size oom-score-adj] :as memory}
         (merge {:workers 1} memory)]
     (when-not (and (integer? workers) (pos? workers))
       (throw (ex-info "memory workers must be a positive integer"
@@ -61,10 +61,6 @@
     (when-not (and (string? size) (not (str/blank? size)))
       (throw (ex-info "memory size must be a non-empty string"
                       {:size size})))
-    (when (some? time)
-      (when-not (and (string? time) (not (str/blank? time)))
-        (throw (ex-info "memory time must be a non-empty string"
-                        {:time time}))))
     (when (some? oom-score-adj)
       (when-not (and (integer? oom-score-adj)
                      (<= -1000 oom-score-adj 1000))
@@ -100,10 +96,9 @@
     config))
 
 (defn- memory-stressor
-  [{:keys [workers size time oom-score-adj]}]
+  [{:keys [workers size oom-score-adj]}]
   (cond-> {:workers workers
            :size size}
-    time (assoc :time time)
     (some? oom-score-adj) (assoc :oomScoreAdj oom-score-adj)))
 
 (defn- cpu-stressor
@@ -186,11 +181,11 @@
                       integer, default 1) and :load (0-100, default 100).
     :memory           Memory stressor. :size is required, e.g. 256MB or 25%.
                       Optional keys are :workers (positive integer,
-                      default 1), :time (linear ramp duration), and
-                      :oom-score-adj (-1000 through 1000).
+                      default 1) and :oom-score-adj (-1000 through 1000).
     :pod-selector     Label map choosing eligible pods. Defaults to every pod
                       in the test namespace.
-    :container-names  Containers within those pods. Defaults to all.
+    :container-names  Containers within those pods. Defaults to the first
+                      container of each pod.
     :targets          Specs to pick from, one per op. Each element is nil,
                       :one, :minority, :majority, :minority-third, :all, or a
                       nested collection of pod names. Defaults to [:one].

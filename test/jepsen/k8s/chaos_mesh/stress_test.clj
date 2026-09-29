@@ -17,7 +17,6 @@
    :cpu {:workers 2 :load 80}
    :memory {:workers 3
             :size "256MB"
-            :time "10s"
             :oom-score-adj -500}})
 
 (deftest config-validation-test
@@ -50,10 +49,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"memory size"
                           (validate-config {:memory {}}))))
-  (testing "memory ramp time and OOM score are validated"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"memory time"
-                          (validate-config {:memory {:size "1GB" :time ""}})))
+  (testing "memory OOM score is validated"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"oom-score-adj"
                           (validate-config {:memory {:size "1GB"
@@ -90,7 +86,6 @@
            (get-in manifest [:spec :stressors :cpu])))
     (is (= {:workers 3
             :size "256MB"
-            :time "10s"
             :oomScoreAdj -500}
            (get-in manifest [:spec :stressors :memory])))))
 
