@@ -211,7 +211,8 @@
                       {:app \"postgres\"}. Defaults to every pod in the test
                       namespace, which is the fault's whole blast radius, so
                       it is worth setting.
-    :container-names  Containers within those pods to fault. Defaults to all.
+    :container-names  Containers within those pods to fault. Defaults to the
+                      first container of each pod.
     :methods          Any of [:read :write]. Defaults to both.
     :errno            Positive errno the faulted calls return. Defaults to 5,
                       EIO.
