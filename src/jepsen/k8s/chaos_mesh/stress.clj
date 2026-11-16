@@ -4,11 +4,14 @@
             [clojure.string :as str]
             [jepsen.generator :as gen]
             [jepsen.k8s.chaos-mesh.experiment :as exp]
+            [jepsen.k8s.chaos-mesh.probe :as probe]
+            [jepsen.k8s.chaos-mesh.stress-probe :as stress-probe]
             [jepsen.k8s.core :as k8s]
             [jepsen.nemesis :as n]
             [jepsen.nemesis.combined :as jn]))
 
 (def ^:private experiment-name "stress-fault")
+(def ^:private default-probe-interval-ms 1000)
 (def ^:private target-specs
   #{:one :minority :majority :minority-third :all})
 
@@ -91,6 +94,15 @@
                              container-names))
         (throw (ex-info "container-names must be a non-empty collection of names"
                         {:container-names container-names}))))
+    (when (contains? config :probe?)
+      (when-not (instance? Boolean (:probe? config))
+        (throw (ex-info "probe? must be a boolean"
+                        {:probe? (:probe? config)}))))
+    (when (contains? config :probe-interval-ms)
+      (when-not (and (integer? (:probe-interval-ms config))
+                     (pos? (:probe-interval-ms config)))
+        (throw (ex-info "probe-interval-ms must be a positive integer"
+                        {:probe-interval-ms (:probe-interval-ms config)}))))
     ;; Validate this early instead of failing during pod discovery.
     (k8s/label-selector (:pod-selector config))
     config))
@@ -140,37 +152,63 @@
 
 (defn- stress-nemesis
   [config dir]
-  (reify
-    n/Reflection
-    (fs [_this] [:start-stress :stop-stress])
+  (let [runner (when (:probe? config)
+                 (probe/runner
+                  (stress-probe/probe)
+                  {:interval-ms (get config
+                                     :probe-interval-ms
+                                     default-probe-interval-ms)}))]
+    (reify
+      n/Reflection
+      (fs [_this] [:start-stress :stop-stress])
 
-    n/Nemesis
-    (setup! [this test]
-      ;; Always sweep a leftover experiment, even without :stress.
-      (stop! test)
-      this)
+      n/Nemesis
+      (setup! [this test]
+        (when runner
+          (probe/stop! runner))
+        ;; Always sweep a leftover experiment, even without :stress.
+        (stop! test)
+        this)
 
-    (invoke! [_this test {:keys [f value] :as op}]
-      (let [result
-            (case f
-              :start-stress
-              (let [eligible (k8s/pod-names
-                              test
-                              {:selector (:pod-selector config)})
-                    targets  (exp/select-targets eligible value)]
-                (when (empty? targets)
-                  (throw (ex-info "stress fault selected no eligible pods"
-                                  {:pod-selector (:pod-selector config)
-                                   :target-spec value
-                                   :eligible-pods eligible})))
-                (apply! test targets config dir))
+      (invoke! [_this test {:keys [f value] :as op}]
+        (let [result
+              (case f
+                :start-stress
+                (do
+                  (when runner
+                    (probe/stop! runner))
+                  (let [eligible (k8s/pod-names
+                                  test
+                                  {:selector (:pod-selector config)})
+                        targets  (exp/select-targets eligible value)]
+                    (when (empty? targets)
+                      (throw (ex-info "stress fault selected no eligible pods"
+                                      {:pod-selector (:pod-selector config)
+                                       :target-spec value
+                                       :eligible-pods eligible})))
+                    (let [result (apply! test targets config dir)]
+                      (when runner
+                        (probe/start!
+                         runner
+                         test
+                         (assoc result
+                                :namespace (k8s/namespace test)
+                                :experiment {:name experiment-name
+                                             :kind "stresschaos"}
+                                :container-names (:container-names config))))
+                      result)))
 
-              :stop-stress
-              (stop! test))]
-        (assoc op :value result)))
+                :stop-stress
+                (do
+                  (when runner
+                    (probe/stop! runner))
+                  (stop! test)))]
+          (assoc op :value result)))
 
-    (teardown! [_this test]
-      (stop! test))))
+      (teardown! [_this test]
+        (when runner
+          (probe/stop! runner))
+        (stop! test)))))
 
 (defn stress-package
   "Builds a package that applies CPU load, memory pressure, or both.
@@ -189,6 +227,9 @@
     :targets          Specs to pick from, one per op. Each element is nil,
                       :one, :minority, :majority, :minority-third, :all, or a
                       nested collection of pod names. Defaults to [:one].
+    :probe?           Log cgroup CPU/memory samples while the fault is active.
+                      Defaults to false.
+    :probe-interval-ms  Milliseconds between samples. Defaults to 1000.
 
   At least one of :cpu or :memory is required. Supplying both applies both
   stressors to the same selected pods."

@@ -78,6 +78,7 @@ the defaults, so overriding one key of a fault keeps the rest:
      :stress  {:pod-selector {:app "postgres"}
                :container-names ["postgres"]
                :targets [:one]
+               :probe? true
                :cpu {:workers 2 :load 80}
                :memory {:workers 1
                         :size "256MB"
@@ -101,6 +102,12 @@ whole spec.
 first container of each pod), and `:targets` (`[:one]`).
 Supplying both stressors applies both to the same selected pods. As with
 `:file-io`, an explicit pod-name target must be nested.
+
+Set `:probe?` to `true` to log cgroup CPU, memory, throttling, OOM, and pressure
+samples from each targeted container while StressChaos is active. The probe is
+best-effort and does not change the Jepsen result. It runs every 1000 ms by
+default; set `:probe-interval-ms` to a positive integer to change the interval.
+The target image must provide `sh` and access to its cgroup files.
 
 ## Notes
 
