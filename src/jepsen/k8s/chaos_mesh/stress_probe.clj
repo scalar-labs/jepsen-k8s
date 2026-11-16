@@ -111,6 +111,56 @@
       (seq (get s "memory.pressure"))
       (assoc-in [:memory :pressure] (pressure (get s "memory.pressure"))))))
 
+(defn- counter-delta
+  [current previous]
+  (when (and (number? current)
+             (number? previous)
+             (<= previous current))
+    (- current previous)))
+
+(defn- cpu-usage-usec
+  [cgroup]
+  (or (get-in cgroup [:cpu :stat :usage_usec])
+      (some-> (get-in cgroup [:cpu :usage-ns]) (quot 1000))))
+
+(defn- cpu-throttled-usec
+  [cgroup]
+  (or (get-in cgroup [:cpu :stat :throttled_usec])
+      (some-> (get-in cgroup [:cpu :stat :throttled_time]) (quot 1000))))
+
+(defn- compact-cgroup
+  [cgroup previous]
+  (let [cpu-some       (get-in cgroup [:cpu :pressure :some :avg10])
+        cpu-full       (get-in cgroup [:cpu :pressure :full :avg10])
+        usage-delta    (counter-delta (cpu-usage-usec cgroup)
+                                      (cpu-usage-usec previous))
+        throttle-delta (counter-delta (cpu-throttled-usec cgroup)
+                                      (cpu-throttled-usec previous))
+        memory-current (get-in cgroup [:memory :current])
+        memory-full    (get-in cgroup [:memory :pressure :full :avg10])
+        oom-kill-delta (counter-delta
+                        (get-in cgroup [:memory :events :oom_kill])
+                        (get-in previous [:memory :events :oom_kill]))
+        cpu             (cond-> {}
+                          (some? cpu-some)
+                          (assoc :some-avg10 cpu-some)
+                          (some? cpu-full)
+                          (assoc :full-avg10 cpu-full)
+                          (some? usage-delta)
+                          (assoc :usage-usec-delta usage-delta)
+                          (some? throttle-delta)
+                          (assoc :throttled-usec-delta throttle-delta))
+        memory          (cond-> {}
+                          (some? memory-current)
+                          (assoc :current-bytes memory-current)
+                          (some? memory-full)
+                          (assoc :full-avg10 memory-full)
+                          (some? oom-kill-delta)
+                          (assoc :oom-kill-delta oom-kill-delta))]
+    (cond-> {}
+      (seq cpu) (assoc :cpu cpu)
+      (seq memory) (assoc :memory memory))))
+
 (defn- error-sample
   [data ^Exception e]
   (assoc data
@@ -119,19 +169,23 @@
          :error-class (.getName (class e))))
 
 (defn- sample-container
-  [test namespace pod-name pod-uid container]
+  [test namespace pod-name pod-uid container state]
   (try
-    {:pod pod-name
-     :pod-uid pod-uid
-     :container container
-     :status :sampled
-     :cgroup (-> (k8s/kubectl! test
-                               :exec pod-name
-                               :-n namespace
-                               :-c container
-                               :--request-timeout "5s"
-                               :-- :sh :-c cgroup-script)
-                 parse-cgroup-output)}
+    (let [key      [pod-name pod-uid container]
+          previous (get-in @state [:containers key])
+          cgroup   (-> (k8s/kubectl! test
+                                     :exec pod-name
+                                     :-n namespace
+                                     :-c container
+                                     :--request-timeout "5s"
+                                     :-- :sh :-c cgroup-script)
+                       parse-cgroup-output)]
+      (swap! state assoc-in [:containers key] cgroup)
+      {:pod pod-name
+       :pod-uid pod-uid
+       :container container
+       :status :sampled
+       :cgroup (compact-cgroup cgroup previous)})
     (catch Exception e
       (error-sample {:pod pod-name
                      :pod-uid pod-uid
@@ -139,31 +193,35 @@
                     e))))
 
 (defn- sample-pod
-  [test namespace configured-containers pod-name]
+  [test namespace configured-containers pod-name state]
   (try
     (let [pod        (k8s/kubectl-json! test :get :pod pod-name :-n namespace)
           pod-uid    (get-in pod [:metadata :uid])
           containers (or (seq configured-containers)
                          (some-> pod :spec :containers first :name vector))]
       (if (seq containers)
-        (mapv #(sample-container test namespace pod-name pod-uid %) containers)
+        (mapv #(sample-container test namespace pod-name pod-uid % state)
+              containers)
         [(error-sample {:pod pod-name}
                        (ex-info "pod has no application container"
                                 {:pod pod-name}))]))
     (catch Exception e
       [(error-sample {:pod pod-name} e)])))
 
-(defrecord StressProbe []
+(defrecord StressProbe [state]
   probe/Probe
-  (sample! [_ test {:keys [targets container-names]}]
+  (sample! [_ test {:keys [targets container-names probe-run-id]}]
+    (when (not= probe-run-id (:probe-run-id @state))
+      (reset! state {:probe-run-id probe-run-id :containers {}}))
     {:containers
      (->> targets
           (mapcat #(sample-pod test
                                (k8s/namespace test)
                                container-names
-                               %))
+                               %
+                               state))
           vec)}))
 
 (defn probe
   []
-  (->StressProbe))
+  (->StressProbe (atom {:probe-run-id ::none :containers {}})))

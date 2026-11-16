@@ -73,7 +73,9 @@
   (reify Runnable
     (run [_]
       (try
-        (let [measurement (sample! (:probe runner) test context)]
+        (let [measurement (sample! (:probe runner)
+                                   test
+                                   (assoc context :probe-run-id run-id))]
           (when (active? runner run-id)
             (info "failure probe sample"
                   (assoc context

@@ -262,6 +262,15 @@
         (n/teardown! nemesis test)
         (is (= [:probe-stop :fault-stop] @calls))))))
 
+(deftest probe-default-interval-test
+  (let [opts (atom nil)]
+    (with-redefs [probe/runner
+                  (fn [_probe runner-opts]
+                    (reset! opts runner-opts)
+                    ::runner)]
+      (stress-nemesis (validate-config (assoc config :probe? true)) "/tmp")
+      (is (= {:interval-ms 5000} @opts)))))
+
 (deftest disabled-probe-does-not-create-runner-test
   (with-redefs [probe/runner
                 (fn [& _]

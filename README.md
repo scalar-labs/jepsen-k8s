@@ -103,11 +103,13 @@ first container of each pod), and `:targets` (`[:one]`).
 Supplying both stressors applies both to the same selected pods. As with
 `:file-io`, an explicit pod-name target must be nested.
 
-Set `:probe?` to `true` to log cgroup CPU, memory, throttling, OOM, and pressure
-samples from each targeted container while StressChaos is active. The probe is
-best-effort and does not change the Jepsen result. It runs every 1000 ms by
-default; set `:probe-interval-ms` to a positive integer to change the interval.
-The target image must provide `sh` and access to its cgroup files.
+Set `:probe?` to `true` to log compact cgroup CPU and memory samples from each
+targeted container while StressChaos is active. Pressure values use the latest
+10-second average; CPU usage, throttling, and OOM kills are logged as changes
+since the previous sample. The probe is best-effort and does not change the
+Jepsen result. It runs every 5000 ms by default; set `:probe-interval-ms` to a
+positive integer to change the interval. The target image must provide `sh` and
+access to its cgroup files.
 
 ## Notes
 

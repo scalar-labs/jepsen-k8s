@@ -36,6 +36,22 @@
       (finally
         (probe/stop! runner)))))
 
+(deftest runner-adds-a-probe-run-id-test
+  (let [contexts (atom [])
+        latch    (CountDownLatch. 2)
+        p        (reify probe/Probe
+                   (sample! [_ _test context]
+                     (swap! contexts conj context)
+                     (.countDown latch)))
+        runner   (probe/runner p {:interval-ms 5 :stop-timeout-ms 1000})]
+    (try
+      (probe/start! runner {} {:fault-kind :stress})
+      (is (.await latch 1 TimeUnit/SECONDS))
+      (is (string? (:probe-run-id (first @contexts))))
+      (is (apply = (map :probe-run-id @contexts)))
+      (finally
+        (probe/stop! runner)))))
+
 (deftest runner-validation-test
   (let [p (reify probe/Probe
             (sample! [_ _test _context] nil))]

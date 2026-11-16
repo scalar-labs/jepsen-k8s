@@ -1,5 +1,5 @@
 (ns jepsen.k8s.chaos-mesh.stress-probe-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is]]
             [jepsen.k8s.chaos-mesh.probe :as probe]
             [jepsen.k8s.chaos-mesh.stress-probe :as stress-probe]
             [jepsen.k8s.core :as k8s]))
@@ -12,8 +12,10 @@
        "[cpu.stat]\n"
        "usage_usec 1234\n"
        "nr_throttled 5\n"
+       "throttled_usec 50\n"
        "[cpu.pressure]\n"
        "some avg10=1.25 avg60=0.50 avg300=0.10 total=99\n"
+       "full avg10=0.25 avg60=0.10 avg300=0.02 total=20\n"
        "[memory.current]\n"
        "268435456\n"
        "[memory.max]\n"
@@ -27,11 +29,16 @@
 (deftest parse-cgroup-v2-output-test
   (is (= {:version 2
           :cpu {:stat {:usage_usec 1234
-                       :nr_throttled 5}
+                       :nr_throttled 5
+                       :throttled_usec 50}
                 :pressure {:some {:avg10 1.25
                                   :avg60 0.5
                                   :avg300 0.1
-                                  :total 99}}}
+                                  :total 99}
+                           :full {:avg10 0.25
+                                  :avg60 0.1
+                                  :avg300 0.02
+                                  :total 20}}}
           :memory {:current 268435456
                    :max :max
                    :events {:oom 1 :oom_kill 0}
@@ -40,6 +47,47 @@
                                      :avg300 0.0
                                      :total 0}}}}
          (parse-cgroup-output cgroup-v2-output))))
+
+(deftest stress-probe-logs-compact-values-and-counter-deltas-test
+  (let [p       (stress-probe/probe)
+        outputs (atom
+                 [cgroup-v2-output
+                  (str "[cgroup.version]\n2\n"
+                       "[cpu.stat]\nusage_usec 2234\nthrottled_usec 80\n"
+                       "[cpu.pressure]\n"
+                       "some avg10=2.50 avg60=1.00 avg300=0.20 total=199\n"
+                       "full avg10=0.50 avg60=0.20 avg300=0.04 total=40\n"
+                       "[memory.current]\n300000000\n"
+                       "[memory.max]\nmax\n"
+                       "[memory.events]\noom 1\noom_kill 1\n"
+                       "[memory.pressure]\n"
+                       "full avg10=0.10 avg60=0.05 avg300=0.01 total=10\n")])
+        test    {:k8s {:namespace "database"}}
+        context {:targets ["postgres-0"] :probe-run-id "run-1"}]
+    (with-redefs [k8s/kubectl-json!
+                  (fn [& _]
+                    {:metadata {:uid "pod-uid-1"}
+                     :spec {:containers [{:name "postgres"}]}})
+                  k8s/kubectl!
+                  (fn [& _]
+                    (let [output (first @outputs)]
+                      (swap! outputs rest)
+                      output))]
+      (is (= {:cpu {:some-avg10 1.25
+                    :full-avg10 0.25}
+              :memory {:current-bytes 268435456
+                       :full-avg10 0.0}}
+             (-> (probe/sample! p test context)
+                 :containers first :cgroup)))
+      (is (= {:cpu {:some-avg10 2.5
+                    :full-avg10 0.5
+                    :usage-usec-delta 1000
+                    :throttled-usec-delta 30}
+              :memory {:current-bytes 300000000
+                       :full-avg10 0.1
+                       :oom-kill-delta 1}}
+             (-> (probe/sample! p test context)
+                 :containers first :cgroup))))))
 
 (deftest parse-cgroup-v1-output-test
   (is (= {:version 1

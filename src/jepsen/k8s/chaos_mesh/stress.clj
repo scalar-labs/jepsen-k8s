@@ -11,7 +11,7 @@
             [jepsen.nemesis.combined :as jn]))
 
 (def ^:private experiment-name "stress-fault")
-(def ^:private default-probe-interval-ms 1000)
+(def ^:private default-probe-interval-ms 5000)
 (def ^:private target-specs
   #{:one :minority :majority :minority-third :all})
 
@@ -229,7 +229,7 @@
                       nested collection of pod names. Defaults to [:one].
     :probe?           Log cgroup CPU/memory samples while the fault is active.
                       Defaults to false.
-    :probe-interval-ms  Milliseconds between samples. Defaults to 1000.
+    :probe-interval-ms  Milliseconds between samples. Defaults to 5000.
 
   At least one of :cpu or :memory is required. Supplying both applies both
   stressors to the same selected pods."
